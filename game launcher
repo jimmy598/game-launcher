@@ -1,3 +1,5 @@
+# help me i need to show icon
+
 import ctypes
 from ctypes import wintypes
 import tkinter as tk
