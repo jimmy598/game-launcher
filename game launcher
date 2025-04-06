@@ -1,0 +1,270 @@
+import ctypes
+from ctypes import wintypes
+import tkinter as tk
+from tkinter import filedialog, messagebox, colorchooser
+from tkinterdnd2 import DND_FILES, TkinterDnD
+from PIL import Image, ImageTk
+import os
+import json
+import subprocess
+import time
+import win32api
+import win32con
+import win32ui
+
+# ===== THEME SETUP =====
+def default_theme():
+    return {
+        "bg": "#1e1e1e",
+        "fg": "#ffffff",
+        "button": "#3c3f41",
+        "hover": "#505357",
+        "card": "#2c2c2c",
+        "text": "#e0e0e0"
+    }
+
+def light_theme():
+    return {
+        "bg": "#ffffff",
+        "fg": "#000000",
+        "button": "#d6eaff",
+        "hover": "#c5e0f7",
+        "card": "#f2f2f2",
+        "text": "#333333"
+    }
+
+theme_colors = {
+    "dark": default_theme(),
+    "light": light_theme(),
+    "custom": default_theme().copy()
+}
+
+current_theme = "dark"
+
+# ===== ICON EXTRACTION =====
+def get_file_icon(file_path):
+    try:
+        # ดึงไอคอนขนาดใหญ่
+        large, small = win32api.ExtractIconEx(file_path, 0)
+        if large:
+            hicon = large[0]
+            ico_x = win32api.GetSystemMetrics(win32con.SM_CXICON)
+            ico_y = win32api.GetSystemMetrics(win32con.SM_CYICON)
+            hdc = win32ui.CreateDCFromHandle(win32ui.CreateDC().GetSafeHdc())
+            hbmp = win32ui.CreateBitmap()
+            hbmp.CreateCompatibleBitmap(hdc, ico_x, ico_y)
+            hdc.SelectObject(hbmp)
+            hdc.DrawIcon((0, 0), hicon)
+            temp_path = os.path.join(os.getcwd(), "temp_icon_large.bmp")
+            hbmp.SaveBitmapFile(hdc, temp_path)
+            image = Image.open(temp_path).resize((48, 48))
+            os.remove(temp_path)
+            icon = ImageTk.PhotoImage(image)
+            win32api.DestroyIcon(hicon)
+            return icon
+
+        # ลองดึงไอคอนขนาดเล็ก
+        if small:
+            hicon = small[0]
+            ico_x = win32api.GetSystemMetrics(win32con.SM_CXSMICON)
+            ico_y = win32api.GetSystemMetrics(win32con.SM_CYSMICON)
+            hdc = win32ui.CreateDCFromHandle(win32ui.CreateDC().GetSafeHdc())
+            hbmp = win32ui.CreateBitmap()
+            hbmp.CreateCompatibleBitmap(hdc, ico_x, ico_y)
+            hdc.SelectObject(hbmp)
+            hdc.DrawIcon((0, 0), hicon)
+            temp_path = os.path.join(os.getcwd(), "temp_icon_small.bmp")
+            hbmp.SaveBitmapFile(hdc, temp_path)
+            image = Image.open(temp_path).resize((48, 48))
+            os.remove(temp_path)
+            icon = ImageTk.PhotoImage(image)
+            win32api.DestroyIcon(hicon)
+            return icon
+
+    except Exception as e:
+        print(f"Icon error for {file_path}: {e}")
+
+    placeholder_path = "placeholder_icon.png"
+    try:
+        icon = ImageTk.PhotoImage(Image.open(placeholder_path).resize((48, 48)))
+    except FileNotFoundError:
+        print(f"Error: Placeholder icon '{placeholder_path}' not found.")
+        icon = None
+
+    return icon
+
+# ===== JSON STORAGE =====
+def save_to_json():
+    data = [{"name": app["name"], "path": app["path"]} for app in apps]
+    with open("apps.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=4)
+
+def load_from_json():
+    if os.path.exists("apps.json"):
+        with open("apps.json", "r", encoding="utf-8") as f:
+            try:
+                data = json.load(f)
+                return [{"name": app["name"], "path": app["path"]} for app in data]
+            except json.JSONDecodeError:
+                messagebox.showerror("ข้อผิดพลาด", "ไฟล์ apps.json ไม่ถูกต้อง")
+                return []
+    return []
+
+# ===== APP ACTIONS =====
+def add_app_from_path(file_path):
+    app_name = os.path.splitext(os.path.basename(file_path))[0]
+    if any(app['path'] == file_path for app in apps):
+        messagebox.showinfo("ซ้ำแล้ว", "แอปนี้มีอยู่แล้วในรายการ")
+        return
+    apps.append({"name": app_name, "path": file_path})
+    save_to_json()
+    update_app_list()
+
+def add_app():
+    file_path = filedialog.askopenfilename(title="เลือกโปรแกรม", filetypes=[("Executable", "*.exe;*.lnk")])
+    if not file_path:
+        return
+    add_app_from_path(file_path)
+
+def delete_app(app):
+    if messagebox.askyesno("ลบแอป", f"ลบ {app['name']}?"):
+        apps.remove(app)
+        save_to_json()
+        update_app_list()
+
+def run_app(app):
+    try:
+        os.startfile(app["path"])
+    except Exception as e:
+        messagebox.showerror("เปิดไม่ได้", f"ไม่สามารถเปิดแอปได้: {e}")
+
+# ===== UI UPDATE =====
+def update_app_list():
+    for widget in app_frame.winfo_children():
+        widget.destroy()
+
+    theme = theme_colors[current_theme]
+    search_term = search_var.get().lower()
+
+    for index, app in enumerate(apps):
+        if search_term and search_term not in app['name'].lower():
+            continue
+
+        card = tk.Frame(app_frame, bg=theme["card"], width=160, height=160)
+        card.grid(row=index // 3, column=index % 3, padx=10, pady=10)
+        card.grid_propagate(False)
+
+        icon_img = get_file_icon(app["path"])
+        icon_label = tk.Label(card, image=icon_img, bg=theme["card"])
+        icon_label.image = icon_img
+        icon_label.pack(pady=(10, 5))
+
+        name = tk.Label(card, text=app["name"], bg=theme["card"], fg=theme["text"], font=("Segoe UI", 10, "bold"), wraplength=140, justify="center")
+        name.pack()
+
+        btn_frame = tk.Frame(card, bg=theme["card"])
+        btn_frame.pack(pady=5)
+
+        run_btn = tk.Button(btn_frame, text="▶", width=4, bg=theme["button"], fg=theme["fg"], relief="flat", command=lambda a=app: run_app(a))
+        run_btn.pack(side="left", padx=2)
+
+        del_btn = tk.Button(btn_frame, text="🗑", width=4, bg="#e57373", fg="white", relief="flat", command=lambda a=app: delete_app(a))
+        del_btn.pack(side="left", padx=2)
+
+# ===== CLOCK =====
+def update_time():
+    now = time.strftime("%H:%M:%S")
+    clock_label.config(text=now)
+    root.after(1000, update_time)
+
+# ===== THEME SWITCH =====
+def toggle_theme():
+    global current_theme
+    current_theme = "light" if current_theme == "dark" else "dark"
+    update_theme()
+
+def update_theme():
+    theme = theme_colors[current_theme]
+    root.config(bg=theme["bg"])
+    title_bar.config(bg=theme["bg"])
+    control_bar.config(bg=theme["bg"])
+    clock_label.config(bg=theme["bg"], fg=theme["fg"])
+    title_label.config(bg=theme["bg"], fg=theme["fg"])
+    add_button.config(bg=theme["button"], fg=theme["fg"], activebackground=theme["hover"])
+    theme_button.config(bg=theme["button"], fg=theme["fg"], activebackground=theme["hover"])
+    color_button.config(bg=theme["button"], fg=theme["fg"], activebackground=theme["hover"])
+    search_entry.config(bg=theme["card"], fg=theme["fg"], insertbackground=theme["fg"])
+    app_frame.config(bg=theme["bg"])
+    update_app_list()
+
+# ===== DRAG-AND-DROP =====
+def on_drop(event):
+    file_path = event.data.strip('{').strip('}')
+    if os.path.isfile(file_path) and file_path.lower().endswith(('.exe', '.lnk')):
+        if messagebox.askyesno("เพิ่มแอป", f"คุณต้องการเพิ่ม {os.path.basename(file_path)} หรือไม่?"):
+            add_app_from_path(file_path)
+
+# ===== CUSTOM COLOR PICKER =====
+def choose_custom_colors():
+    global current_theme
+    custom_theme = theme_colors["custom"].copy()
+    for key in custom_theme:
+        color_code = colorchooser.askcolor(title=f"เลือกสีสำหรับ {key}", initialcolor=custom_theme[key])
+        if color_code and color_code[1]:
+            custom_theme[key] = color_code[1]
+        else:
+            return  # User cancelled, don't update
+    theme_colors["custom"] = custom_theme
+    current_theme = "custom"
+    update_theme()
+
+# ===== UI SETUP =====
+root = TkinterDnD.Tk()
+root.title("Game Launcher Pro")
+root.geometry("900x600")
+root.minsize(700, 500)
+root.drop_target_register(DND_FILES)
+root.dnd_bind('<<Drop>>', on_drop)
+
+theme = theme_colors[current_theme]
+root.configure(bg=theme["bg"])
+
+# ===== TITLE BAR =====
+title_bar = tk.Frame(root, bg=theme["bg"])
+title_bar.pack(fill="x", pady=10)
+
+title_label = tk.Label(title_bar, text="🎮 Game Launcher Pro", font=("Segoe UI", 20, "bold"), bg=theme["bg"], fg=theme["fg"])
+title_label.pack(side="left", padx=20)
+
+clock_label = tk.Label(title_bar, font=("Segoe UI", 14), bg=theme["bg"], fg=theme["fg"])
+clock_label.pack(side="right", padx=20)
+update_time()
+
+# ===== SEARCH + CONTROLS =====
+control_bar = tk.Frame(root, bg=theme["bg"])
+control_bar.pack(fill="x", pady=(0, 15))
+
+search_var = tk.StringVar()
+search_var.trace_add("write", lambda *args: update_app_list())
+search_entry = tk.Entry(control_bar, textvariable=search_var, font=("Segoe UI", 12), width=30, bg=theme["card"], fg=theme["fg"], insertbackground=theme["fg"])
+search_entry.pack(side="left", padx=10)
+
+add_button = tk.Button(control_bar, text="➕ เพิ่มแอป", font=("Segoe UI", 12), bg=theme["button"], fg=theme["fg"], relief="flat", command=add_app, activebackground=theme["hover"])
+add_button.pack(side="left", padx=10)
+
+theme_button = tk.Button(control_bar, text="🌓 สลับธีม", font=("Segoe UI", 12), bg=theme["button"], fg=theme["fg"], relief="flat", command=toggle_theme, activebackground=theme["hover"])
+theme_button.pack(side="left", padx=5)
+
+color_button = tk.Button(control_bar, text="🎨 ปรับสีเอง", font=("Segoe UI", 12), bg=theme["button"], fg=theme["fg"], relief="flat", command=choose_custom_colors, activebackground=theme["hover"])
+color_button.pack(side="left", padx=5)
+
+# ===== APP FRAME =====
+app_frame = tk.Frame(root, bg=theme["bg"])
+app_frame.pack(expand=True, fill="both", padx=20, pady=10)
+
+# ===== INITIAL LOAD =====
+apps = load_from_json()
+update_app_list()
+
+# ===== START LOOP =====
+root.mainloop()
